@@ -1,7 +1,7 @@
+use crate::yaml::{Hash, Yaml};
 use std::convert::From;
 use std::error::Error;
 use std::fmt::{self, Display};
-use crate::yaml::{Hash, Yaml};
 
 #[derive(Copy, Clone, Debug)]
 pub enum EmitError {
@@ -41,14 +41,16 @@ pub struct YamlEmitter<'a> {
 pub type EmitResult = Result<(), EmitError>;
 
 // from serialize::json
-fn escape_str(wr: &mut dyn fmt::Write, v: &str) -> Result<(), fmt::Error> {
-    wr.write_str("\"")?;
+fn escape_str(wr: &mut dyn fmt::Write, v: &str, quoted: bool) -> Result<(), fmt::Error> {
+    if quoted {
+        wr.write_str("\"")?;
+    }
 
     let mut start = 0;
 
     for (i, byte) in v.bytes().enumerate() {
         let escaped = match byte {
-            b'"' => "\\\"",
+            b'"' if quoted => "\\\"",
             b'\\' => "\\\\",
             b'\x00' => "\\u0000",
             b'\x01' => "\\u0001",
@@ -99,7 +101,9 @@ fn escape_str(wr: &mut dyn fmt::Write, v: &str) -> Result<(), fmt::Error> {
         wr.write_str(&v[start..])?;
     }
 
-    wr.write_str("\"")?;
+    if quoted {
+        wr.write_str("\"")?;
+    }
     Ok(())
 }
 
@@ -155,12 +159,14 @@ impl<'a> YamlEmitter<'a> {
             Yaml::Hash(ref h) => self.emit_hash(h),
             Yaml::String(ref v) => {
                 if need_quotes(v) {
-                    escape_str(self.writer, v)?;
+                    escape_str(self.writer, v, true)?;
                 } else {
                     write!(self.writer, "{}", v)?;
                 }
                 Ok(())
             }
+            Yaml::BlockScalar(ref v) => self.emit_block_scalar(v),
+            Yaml::Comment(ref v) => self.emit_comment(v),
             Yaml::Boolean(v) => {
                 if v {
                     self.writer.write_str("true")?;
@@ -179,6 +185,12 @@ impl<'a> YamlEmitter<'a> {
             }
             Yaml::Null | Yaml::BadValue => {
                 write!(self.writer, "~")?;
+                Ok(())
+            }
+            Yaml::DocFragment(ref fragment) => {
+                for f in fragment.iter() {
+                    self.emit_node(&f)?
+                }
                 Ok(())
             }
             // XXX(chenyh) Alias
@@ -232,6 +244,39 @@ impl<'a> YamlEmitter<'a> {
                 }
             }
             self.level -= 1;
+        }
+        Ok(())
+    }
+
+    fn emit_block_scalar(&mut self, mut v: &str) -> EmitResult {
+        if v.ends_with('\n') {
+            writeln!(self.writer, "|+")?;
+            v = &v[..v.len() - 1];
+        } else {
+            writeln!(self.writer, "|-")?;
+        }
+        self.level += 1;
+        for (count, line) in v.split('\n').enumerate() {
+            if count > 0 {
+                writeln!(self.writer)?;
+            }
+            if !line.is_empty() {
+                self.write_indent()?;
+                escape_str(self.writer, line, false)?;
+            }
+        }
+        self.level -= 1;
+        Ok(())
+    }
+
+    fn emit_comment(&mut self, v: &str) -> EmitResult {
+        for line in v.split('\n') {
+            if line.is_empty() {
+                writeln!(self.writer, "#")?;
+            } else {
+                writeln!(self.writer, "# {}", line)?;
+            }
+            self.write_indent()?;
         }
         Ok(())
     }
@@ -632,4 +677,66 @@ a:
         assert_eq!(s, writer);
     }
 
+    #[test]
+    fn test_comment() {
+        let s = r#"---
+# This is a comment
+#
+# spread over multiple lines.
+"#;
+
+        let doc = Yaml::Comment("This is a comment\n\nspread over multiple lines.".to_string());
+        let mut writer = String::new();
+        {
+            let mut emitter = YamlEmitter::new(&mut writer);
+            emitter.dump(&doc).unwrap();
+        }
+        println!("original:\n{}", s);
+        println!("emitted:\n{}", writer);
+
+        assert_eq!(s, writer);
+    }
+
+    #[test]
+    fn test_block_scalar() {
+        let s = r#"---
+a: |+
+  This is a block scalar.
+  There are two newlines at the end of this string.
+
+b: |-
+  This is a block scalar.
+  There is no newline at the end of this string.
+c: A plain string."#;
+
+        let mut hash = Hash::new();
+        hash.insert(
+            Yaml::String("a".to_string()),
+            Yaml::BlockScalar(
+                "This is a block scalar.\nThere are two newlines at the end of this string.\n\n"
+                    .to_string(),
+            ),
+        );
+        hash.insert(
+            Yaml::String("b".to_string()),
+            Yaml::BlockScalar(
+                "This is a block scalar.\nThere is no newline at the end of this string."
+                    .to_string(),
+            ),
+        );
+        hash.insert(
+            Yaml::String("c".to_string()),
+            Yaml::String("A plain string.".to_string()),
+        );
+        let doc = Yaml::Hash(hash);
+        let mut writer = String::new();
+        {
+            let mut emitter = YamlEmitter::new(&mut writer);
+            emitter.dump(&doc).unwrap();
+        }
+        println!("original:\n{}", s);
+        println!("emitted:\n{}", writer);
+
+        assert_eq!(s, writer);
+    }
 }

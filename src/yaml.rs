@@ -1,6 +1,6 @@
-use linked_hash_map::LinkedHashMap;
 use crate::parser::*;
 use crate::scanner::{Marker, ScanError, TScalarStyle, TokenType};
+use linked_hash_map::LinkedHashMap;
 use std::collections::BTreeMap;
 use std::f64;
 use std::i64;
@@ -34,6 +34,10 @@ pub enum Yaml {
     Integer(i64),
     /// YAML scalar.
     String(string::String),
+    /// YAML block scalar.
+    BlockScalar(string::String),
+    /// YAML comment.
+    Comment(string::String),
     /// YAML bool, e.g. `true` or `false`.
     Boolean(bool),
     /// YAML array, can be accessed as a `Vec`.
@@ -44,6 +48,8 @@ pub enum Yaml {
     Hash(self::Hash),
     /// Alias, not fully supported yet.
     Alias(usize),
+    /// Document fragment.
+    DocFragment(Vec<Yaml>),
     /// YAML null, e.g. `null` or `~`.
     Null,
     /// Accessing a nonexistent node via the Index trait returns `BadValue`. This
@@ -367,8 +373,8 @@ impl Iterator for YamlIter {
 
 #[cfg(test)]
 mod test {
-    use std::f64;
     use crate::yaml::*;
+    use std::f64;
     #[test]
     fn test_coerce() {
         let s = "---
