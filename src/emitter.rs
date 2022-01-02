@@ -208,8 +208,15 @@ impl<'a> YamlEmitter<'a> {
                     writeln!(self.writer)?;
                     self.write_indent()?;
                 }
+                let (y, inline) = match x {
+                    Yaml::DocFragment(vec) if vec.len()==2 && matches!(vec[0], Yaml::Comment(_)) => {
+                        self.emit_node(&vec[0])?;
+                        (&vec[1], false)
+                    },
+                    x => (x, true),
+                };
                 write!(self.writer, "-")?;
-                self.emit_val(true, x)?;
+                self.emit_val(inline, y)?;
             }
             self.level -= 1;
         }
