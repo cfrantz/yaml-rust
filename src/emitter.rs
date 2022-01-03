@@ -1,4 +1,4 @@
-use crate::yaml::{Hash, Yaml};
+use crate::yaml::{Hash, Yaml, FragStyle};
 use std::convert::From;
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -34,6 +34,7 @@ pub struct YamlEmitter<'a> {
     writer: &'a mut dyn fmt::Write,
     best_indent: usize,
     compact: bool,
+    oneline: bool,
 
     level: isize,
 }
@@ -113,6 +114,7 @@ impl<'a> YamlEmitter<'a> {
             writer,
             best_indent: 2,
             compact: true,
+            oneline: false,
             level: -1,
         }
     }
@@ -158,14 +160,21 @@ impl<'a> YamlEmitter<'a> {
             Yaml::Array(ref v) => self.emit_array(v),
             Yaml::Hash(ref h) => self.emit_hash(h),
             Yaml::String(ref v) => {
-                if need_quotes(v) {
+                if need_quotes(v) || self.oneline {
                     escape_str(self.writer, v, true)?;
                 } else {
                     write!(self.writer, "{}", v)?;
                 }
                 Ok(())
             }
-            Yaml::BlockScalar(ref v) => self.emit_block_scalar(v),
+            Yaml::BlockScalar(ref v) => {
+                if self.oneline {
+                    escape_str(self.writer, v, true)?;
+                } else {
+                    self.emit_block_scalar(v)?
+                }
+                Ok(())
+            },
             Yaml::Comment(ref v) => self.emit_comment(v),
             Yaml::Boolean(v) => {
                 if v {
@@ -187,20 +196,46 @@ impl<'a> YamlEmitter<'a> {
                 write!(self.writer, "~")?;
                 Ok(())
             }
-            Yaml::DocFragment(ref fragment) => {
-                for f in fragment.iter() {
-                    self.emit_node(&f)?
-                }
-                Ok(())
+            Yaml::DocFragment(ref fragment, ref style) => {
+                self.emit_fragment(fragment, style)
             }
             // XXX(chenyh) Alias
             _ => Ok(()),
         }
     }
 
+    fn emit_fragment(&mut self, fragment: &[Yaml], style: &FragStyle) -> EmitResult {
+        let oneline = self.oneline;
+        let level = self.level;
+        match style {
+            FragStyle::Oneline => {
+                self.oneline = true;
+            }
+            FragStyle::Indented => {
+                writeln!(self.writer)?;
+                self.level += 1;
+                self.write_indent()?;
+            }
+            _ => {}
+        };
+        for f in fragment.iter() {
+            self.emit_node(&f)?
+        }
+        self.oneline = oneline;
+        self.level = level;
+        Ok(())
+    }
+
     fn emit_array(&mut self, v: &[Yaml]) -> EmitResult {
-        if v.is_empty() {
-            write!(self.writer, "[]")?;
+        if v.is_empty() || self.oneline {
+            write!(self.writer, "[")?;
+            for (cnt, x) in v.iter().enumerate() {
+                if cnt > 0 {
+                    write!(self.writer, ", ")?;
+                }
+                self.emit_node(x)?;
+            }
+            write!(self.writer, "]")?;
         } else {
             self.level += 1;
             for (cnt, x) in v.iter().enumerate() {
@@ -209,7 +244,7 @@ impl<'a> YamlEmitter<'a> {
                     self.write_indent()?;
                 }
                 let (y, inline) = match x {
-                    Yaml::DocFragment(vec) if vec.len()==2 && matches!(vec[0], Yaml::Comment(_)) => {
+                    Yaml::DocFragment(vec, _) if vec.len()==2 && matches!(vec[0], Yaml::Comment(_)) => {
                         self.emit_node(&vec[0])?;
                         (&vec[1], false)
                     },
@@ -224,18 +259,24 @@ impl<'a> YamlEmitter<'a> {
     }
 
     fn emit_hash(&mut self, h: &Hash) -> EmitResult {
-        if h.is_empty() {
-            self.writer.write_str("{}")?;
+        if h.is_empty() || self.oneline {
+            self.writer.write_str("{")?;
         } else {
             self.level += 1;
+        }
+
             for (cnt, (k, v)) in h.iter().enumerate() {
                 let complex_key = match *k {
                     Yaml::Hash(_) | Yaml::Array(_) => true,
                     _ => false,
                 };
                 if cnt > 0 {
-                    writeln!(self.writer)?;
-                    self.write_indent()?;
+                    if self.oneline {
+                        self.writer.write_str(", ")?;
+                    } else {
+                        writeln!(self.writer)?;
+                        self.write_indent()?;
+                    }
                 }
                 if complex_key {
                     write!(self.writer, "?")?;
@@ -247,9 +288,12 @@ impl<'a> YamlEmitter<'a> {
                 } else {
                     self.emit_node(k)?;
                     write!(self.writer, ":")?;
-                    self.emit_val(false, v)?;
+                    self.emit_val(self.oneline, v)?;
                 }
             }
+        if h.is_empty() || self.oneline {
+            self.writer.write_str("}")?;
+        } else {
             self.level -= 1;
         }
         Ok(())

@@ -49,13 +49,20 @@ pub enum Yaml {
     /// Alias, not fully supported yet.
     Alias(usize),
     /// Document fragment.
-    DocFragment(Vec<Yaml>),
+    DocFragment(Vec<Yaml>, FragStyle),
     /// YAML null, e.g. `null` or `~`.
     Null,
     /// Accessing a nonexistent node via the Index trait returns `BadValue`. This
     /// simplifies error handling in the calling code. Invalid type conversion also
     /// returns `BadValue`.
     BadValue,
+}
+
+#[derive(Clone, PartialEq, PartialOrd, Debug, Eq, Ord, Hash)]
+pub enum FragStyle {
+    None,
+    Oneline,
+    Indented,
 }
 
 pub type Array = Vec<Yaml>;
