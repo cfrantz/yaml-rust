@@ -1,141 +1,21 @@
 use std::char;
 use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt;
 
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub enum TEncoding {
-    Utf8,
-}
+pub use self::error::ScanError;
+pub use self::marker::Marker;
+use self::types::SimpleKey;
+pub use self::types::TEncoding;
+pub use self::types::TScalarStyle;
+pub use self::types::Token;
+pub use self::types::TokenType;
+use funcs::*;
 
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub enum TScalarStyle {
-    Any,
-    Plain,
-    SingleQuoted,
-    DoubleQuoted,
+mod error;
+mod funcs;
+mod marker;
+mod types;
 
-    Literal,
-    Foled,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct Marker {
-    index: usize,
-    line: usize,
-    col: usize,
-}
-
-impl Marker {
-    fn new(index: usize, line: usize, col: usize) -> Marker {
-        Marker { index, line, col }
-    }
-
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
-    pub fn line(&self) -> usize {
-        self.line
-    }
-
-    pub fn col(&self) -> usize {
-        self.col
-    }
-}
-
-#[derive(Clone, PartialEq, Debug, Eq)]
-pub struct ScanError {
-    mark: Marker,
-    info: String,
-}
-
-impl ScanError {
-    pub fn new(loc: Marker, info: &str) -> ScanError {
-        ScanError {
-            mark: loc,
-            info: info.to_owned(),
-        }
-    }
-
-    pub fn marker(&self) -> &Marker {
-        &self.mark
-    }
-}
-
-impl Error for ScanError {
-    fn description(&self) -> &str {
-        self.info.as_ref()
-    }
-
-    fn cause(&self) -> Option<&dyn Error> {
-        None
-    }
-}
-
-impl fmt::Display for ScanError {
-    // col starts from 0
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            formatter,
-            "{} at line {} column {}",
-            self.info,
-            self.mark.line,
-            self.mark.col + 1
-        )
-    }
-}
-
-#[derive(Clone, PartialEq, Debug, Eq)]
-pub enum TokenType {
-    NoToken,
-    StreamStart(TEncoding),
-    StreamEnd,
-    /// major, minor
-    VersionDirective(u32, u32),
-    /// handle, prefix
-    TagDirective(String, String),
-    DocumentStart,
-    DocumentEnd,
-    BlockSequenceStart,
-    BlockMappingStart,
-    BlockEnd,
-    FlowSequenceStart,
-    FlowSequenceEnd,
-    FlowMappingStart,
-    FlowMappingEnd,
-    BlockEntry,
-    FlowEntry,
-    Key,
-    Value,
-    Alias(String),
-    Anchor(String),
-    /// handle, suffix
-    Tag(String, String),
-    Scalar(TScalarStyle, String),
-}
-
-#[derive(Clone, PartialEq, Debug, Eq)]
-pub struct Token(pub Marker, pub TokenType);
-
-#[derive(Clone, PartialEq, Debug, Eq)]
-struct SimpleKey {
-    possible: bool,
-    required: bool,
-    token_number: usize,
-    mark: Marker,
-}
-
-impl SimpleKey {
-    fn new(mark: Marker) -> SimpleKey {
-        SimpleKey {
-            possible: false,
-            required: false,
-            token_number: 0,
-            mark,
-        }
-    }
-}
+pub type ScanResult = Result<(), ScanError>;
 
 #[derive(Debug)]
 pub struct Scanner<T> {
@@ -174,54 +54,6 @@ impl<T: Iterator<Item = char>> Iterator for Scanner<T> {
     }
 }
 
-#[inline]
-fn is_z(c: char) -> bool {
-    c == '\0'
-}
-#[inline]
-fn is_break(c: char) -> bool {
-    c == '\n' || c == '\r'
-}
-#[inline]
-fn is_breakz(c: char) -> bool {
-    is_break(c) || is_z(c)
-}
-#[inline]
-fn is_blank(c: char) -> bool {
-    c == ' ' || c == '\t'
-}
-#[inline]
-fn is_blankz(c: char) -> bool {
-    is_blank(c) || is_breakz(c)
-}
-#[inline]
-fn is_digit(c: char) -> bool {
-    ('0'..='9').contains(&c)
-}
-#[inline]
-fn is_alpha(c: char) -> bool {
-    matches!(c, '0'..='9' | 'a'..='z' | 'A'..='Z' | '_' | '-')
-}
-#[inline]
-fn is_hex(c: char) -> bool {
-    ('0'..='9').contains(&c) || ('a'..='f').contains(&c) || ('A'..='F').contains(&c)
-}
-#[inline]
-fn as_hex(c: char) -> u32 {
-    match c {
-        '0'..='9' => (c as u32) - ('0' as u32),
-        'a'..='f' => (c as u32) - ('a' as u32) + 10,
-        'A'..='F' => (c as u32) - ('A' as u32) + 10,
-        _ => unreachable!(),
-    }
-}
-#[inline]
-fn is_flow(c: char) -> bool {
-    matches!(c, ',' | '[' | ']' | '{' | '}')
-}
-
-pub type ScanResult = Result<(), ScanError>;
-
 impl<T: Iterator<Item = char>> Scanner<T> {
     /// Creates the YAML tokenizer.
     pub fn new(rdr: T) -> Scanner<T> {
@@ -246,8 +78,38 @@ impl<T: Iterator<Item = char>> Scanner<T> {
     }
 
     #[inline]
+    pub fn get_mark(&self) -> Marker {
+        self.mark
+    }
+
+    #[inline]
     pub fn get_error(&self) -> Option<ScanError> {
-        self.error.as_ref().cloned()
+        self.error.clone()
+    }
+
+    #[inline]
+    pub fn is_stream_started(&self) -> bool {
+        self.stream_start_produced
+    }
+
+    #[inline]
+    pub fn is_stream_finished(&self) -> bool {
+        self.stream_end_produced
+    }
+
+    #[inline]
+    fn ch(&self) -> char {
+        self.buffer[0]
+    }
+
+    #[inline]
+    fn allow_simple_key(&mut self) {
+        self.simple_key_allowed = true;
+    }
+
+    #[inline]
+    fn disallow_simple_key(&mut self) {
+        self.simple_key_allowed = false;
     }
 
     #[inline]
@@ -262,14 +124,18 @@ impl<T: Iterator<Item = char>> Scanner<T> {
 
     #[inline]
     fn skip(&mut self) {
-        let c = self.buffer.pop_front().unwrap();
+        let c = self
+            .buffer
+            .pop_front()
+            .expect("cannot skip: ensure lookahead is called");
 
         self.mark.index += 1;
-        if c == '\n' {
-            self.mark.line += 1;
-            self.mark.col = 0;
-        } else {
-            self.mark.col += 1;
+        match c {
+            '\n' | '\r' => {
+                self.mark.line += 1;
+                self.mark.col = 0;
+            }
+            _ => self.mark.col += 1,
         }
     }
 
@@ -281,37 +147,6 @@ impl<T: Iterator<Item = char>> Scanner<T> {
         } else if is_break(self.buffer[0]) {
             self.skip();
         }
-    }
-
-    #[inline]
-    fn ch(&self) -> char {
-        self.buffer[0]
-    }
-
-    #[inline]
-    fn ch_is(&self, c: char) -> bool {
-        self.buffer[0] == c
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    fn eof(&self) -> bool {
-        self.ch_is('\0')
-    }
-
-    #[inline]
-    pub fn stream_started(&self) -> bool {
-        self.stream_start_produced
-    }
-
-    #[inline]
-    pub fn stream_ended(&self) -> bool {
-        self.stream_end_produced
-    }
-
-    #[inline]
-    pub fn mark(&self) -> Marker {
-        self.mark
     }
 
     #[inline]
@@ -337,15 +172,7 @@ impl<T: Iterator<Item = char>> Scanner<T> {
         }
     }
 
-    fn allow_simple_key(&mut self) {
-        self.simple_key_allowed = true;
-    }
-
-    fn disallow_simple_key(&mut self) {
-        self.simple_key_allowed = false;
-    }
-
-    pub fn fetch_next_token(&mut self) -> ScanResult {
+    fn fetch_next_token(&mut self) -> ScanResult {
         self.lookahead(1);
         // println!("--> fetch_next_token Cur {:?} {:?}", self.mark, self.ch());
 
@@ -362,19 +189,21 @@ impl<T: Iterator<Item = char>> Scanner<T> {
 
         self.lookahead(4);
 
-        if is_z(self.ch()) {
+        let ch = self.buffer[0];
+        if is_z(ch) {
             self.fetch_stream_end()?;
             return Ok(());
         }
 
         // Is it a directive?
-        if self.mark.col == 0 && self.ch_is('%') {
+        if self.mark.col == 0 && ch == '%' {
             return self.fetch_directive();
         }
 
+        let nc = self.buffer[1];
         if self.mark.col == 0
-            && self.buffer[0] == '-'
-            && self.buffer[1] == '-'
+            && ch == '-'
+            && nc == '-'
             && self.buffer[2] == '-'
             && is_blankz(self.buffer[3])
         {
@@ -383,8 +212,8 @@ impl<T: Iterator<Item = char>> Scanner<T> {
         }
 
         if self.mark.col == 0
-            && self.buffer[0] == '.'
-            && self.buffer[1] == '.'
+            && ch == '.'
+            && nc == '.'
             && self.buffer[2] == '.'
             && is_blankz(self.buffer[3])
         {
@@ -392,9 +221,7 @@ impl<T: Iterator<Item = char>> Scanner<T> {
             return Ok(());
         }
 
-        let c = self.buffer[0];
-        let nc = self.buffer[1];
-        match c {
+        match ch {
             '[' => self.fetch_flow_collection_start(TokenType::FlowSequenceStart),
             '{' => self.fetch_flow_collection_start(TokenType::FlowMappingStart),
             ']' => self.fetch_flow_collection_end(TokenType::FlowSequenceEnd),
@@ -424,13 +251,13 @@ impl<T: Iterator<Item = char>> Scanner<T> {
             ':' | '?' if !is_blankz(nc) && self.flow_level == 0 => self.fetch_plain_scalar(),
             '%' | '@' | '`' => Err(ScanError::new(
                 self.mark,
-                &format!("unexpected character: `{}'", c),
+                &format!("unexpected character: `{}'", ch),
             )),
             _ => self.fetch_plain_scalar(),
         }
     }
 
-    pub fn next_token(&mut self) -> Result<Option<Token>, ScanError> {
+    fn next_token(&mut self) -> Result<Option<Token>, ScanError> {
         if self.stream_end_produced {
             return Ok(None);
         }
@@ -438,17 +265,18 @@ impl<T: Iterator<Item = char>> Scanner<T> {
         if !self.token_available {
             self.fetch_more_tokens()?;
         }
-        let t = self.tokens.pop_front().unwrap();
+
+        let token = self.tokens.pop_front().unwrap();
         self.token_available = false;
         self.tokens_parsed += 1;
 
-        if let TokenType::StreamEnd = t.1 {
+        if let TokenType::StreamEnd = token.1 {
             self.stream_end_produced = true;
         }
-        Ok(Some(t))
+        Ok(Some(token))
     }
 
-    pub fn fetch_more_tokens(&mut self) -> ScanResult {
+    fn fetch_more_tokens(&mut self) -> ScanResult {
         let mut need_more;
         loop {
             need_more = false;
@@ -463,7 +291,6 @@ impl<T: Iterator<Item = char>> Scanner<T> {
                     }
                 }
             }
-
             if !need_more {
                 break;
             }
@@ -1232,7 +1059,7 @@ impl<T: Iterator<Item = char>> Scanner<T> {
         } else {
             Ok(Token(
                 start_mark,
-                TokenType::Scalar(TScalarStyle::Foled, string),
+                TokenType::Scalar(TScalarStyle::Folded, string),
             ))
         }
     }
