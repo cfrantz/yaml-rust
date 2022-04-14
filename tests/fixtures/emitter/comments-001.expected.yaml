@@ -1,0 +1,14 @@
+---
+repos:
+  - repo: "https://github.com/rapidsai/frigate/"
+    rev: v0.4.0
+    hooks:
+      - id: frigate
+        versions:
+          - 1
+          - 2
+          - 3
+  - repo: "https://github.com/gruntwork-io/pre-commit"
+    rev: v0.1.12
+    hooks:
+      - id: "helmlint\""

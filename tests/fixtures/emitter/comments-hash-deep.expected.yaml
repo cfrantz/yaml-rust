@@ -1,0 +1,12 @@
+---
+key: value
+deep_map:
+  level1:
+    one: value
+    level2:
+      two: two
+      level3:
+        three: three
+array:
+  - first: 1
+  - second: 2

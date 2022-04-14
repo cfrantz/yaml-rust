@@ -188,198 +188,27 @@ impl<'a> YamlEmitter<'a> {
 mod test {
     use super::*;
     use crate::YamlLoader;
+    use pretty_assertions::assert_eq;
+    use std::env;
+    use std::fs;
 
-    #[test]
-    fn test_emit_simple() {
-        let s = "
-# comment
-a0 bb: val
-a1:
-    b1: 4
-    b2: d
-a2: 4 # i'm comment
-a3: [1, 2, 3]
-a4:
-    - [a1, a2]
-    - 2
-";
+    macro_rules! fixture_test {
+        ($test_name:ident, $fixture:expr) => {
+            #[test]
+            fn $test_name() -> Result<(), std::io::Error> {
+                let record_fixtures = env::var("RECORD_FIXTURES").is_ok();
 
-        let docs = YamlLoader::load_from_str(&s).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.dump(doc).unwrap();
-        }
-        println!("original:\n{}", s);
-        println!("emitted:\n{}", writer);
-        let docs_new = match YamlLoader::load_from_str(&writer) {
-            Ok(y) => y,
-            Err(e) => panic!("{}", e),
+                let input = format!("tests/fixtures/{}.input.yaml", $fixture);
+                let expected = format!("tests/fixtures/{}.expected.yaml", $fixture);
+                fixture_roundtrip(&input, &expected, record_fixtures);
+                Ok(())
+            }
         };
-        let doc_new = &docs_new[0];
-
-        assert_eq!(doc, doc_new);
-    }
-
-    #[test]
-    fn test_emit_complex() {
-        let s = r#"
-cataloge:
-  product: &coffee   { name: Coffee,    price: 2.5  ,  unit: 1l  }
-  product: &cookies  { name: Cookies!,  price: 3.40 ,  unit: 400g}
-
-products:
-  *coffee:
-    amount: 4
-  *cookies:
-    amount: 4
-  [1,2,3,4]:
-    array key
-  2.4:
-    real key
-  true:
-    bool key
-  {}:
-    empty hash key
-            "#;
-        let docs = YamlLoader::load_from_str(&s).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.dump(doc).unwrap();
-        }
-        let docs_new = match YamlLoader::load_from_str(&writer) {
-            Ok(y) => y,
-            Err(e) => panic!("{}", e),
-        };
-        let doc_new = &docs_new[0];
-        assert_eq!(doc, doc_new);
-    }
-
-    #[test]
-    fn test_emit_avoid_quotes() {
-        let s = r#"---
-a7: 你好
-boolean: "true"
-boolean2: "false"
-date: 2014-12-31
-empty_string: ""
-empty_string1: " "
-empty_string2: "    a"
-empty_string3: "    a "
-exp: "12e7"
-field: ":"
-field2: "{"
-field3: "\\"
-field4: "\n"
-field5: "can't avoid quote"
-float: "2.6"
-int: "4"
-nullable: "null"
-nullable2: "~"
-products:
-  "*coffee":
-    amount: 4
-  "*cookies":
-    amount: 4
-  ".milk":
-    amount: 1
-  "2.4": real key
-  "[1,2,3,4]": array key
-  "true": bool key
-  "{}": empty hash key
-x: test
-y: avoid quoting here
-z: string with spaces"#;
-
-        let docs = YamlLoader::load_from_str(&s).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.dump(doc).unwrap();
-        }
-
-        assert_eq!(s, writer, "actual:\n\n{}\n", writer);
-    }
-
-    #[test]
-    fn emit_quoted_bools() {
-        let input = r#"---
-string0: yes
-string1: no
-string2: "true"
-string3: "false"
-string4: "~"
-null0: ~
-[true, false]: real_bools
-[True, TRUE, False, FALSE, y,Y,yes,Yes,YES,n,N,no,No,NO,on,On,ON,off,Off,OFF]: false_bools
-bool0: true
-bool1: false"#;
-        let expected = r#"---
-string0: "yes"
-string1: "no"
-string2: "true"
-string3: "false"
-string4: "~"
-null0: ~
-? - true
-  - false
-: real_bools
-? - "True"
-  - "TRUE"
-  - "False"
-  - "FALSE"
-  - y
-  - Y
-  - "yes"
-  - "Yes"
-  - "YES"
-  - n
-  - N
-  - "no"
-  - "No"
-  - "NO"
-  - "on"
-  - "On"
-  - "ON"
-  - "off"
-  - "Off"
-  - "OFF"
-: false_bools
-bool0: true
-bool1: false"#;
-
-        let docs = YamlLoader::load_from_str(&input).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.dump(doc).unwrap();
-        }
-
-        assert_eq!(
-            expected, writer,
-            "expected:\n{}\nactual:\n{}\n",
-            expected, writer
-        );
     }
 
     #[test]
     fn test_empty_and_nested() {
-        test_empty_and_nested_flag(false)
-    }
-
-    #[test]
-    fn test_empty_and_nested_compact() {
-        test_empty_and_nested_flag(true)
-    }
-
-    fn test_empty_and_nested_flag(compact: bool) {
-        let s = if compact {
-            r#"---
+        let input = r#"---
 a:
   b:
     c: hello
@@ -387,9 +216,9 @@ a:
 e:
   - f
   - g
-  - h: []"#
-        } else {
-            r#"---
+  - h: []"#;
+
+        let noncompact_input = r#"---
 a:
   b:
     c: hello
@@ -398,24 +227,15 @@ e:
   - f
   - g
   -
-    h: []"#
-        };
+    h: []"#;
 
-        let docs = YamlLoader::load_from_str(&s).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.compact(compact);
-            emitter.dump(doc).unwrap();
-        }
-
-        assert_eq!(s, writer);
+        assert_roundtrip(input);
+        assert_roundtrip_noncompact(noncompact_input);
     }
 
     #[test]
     fn test_nested_arrays() {
-        let s = r#"---
+        let input = r#"---
 a:
   - b
   - - c
@@ -423,22 +243,12 @@ a:
     - - e
       - f"#;
 
-        let docs = YamlLoader::load_from_str(&s).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.dump(doc).unwrap();
-        }
-        println!("original:\n{}", s);
-        println!("emitted:\n{}", writer);
-
-        assert_eq!(s, writer);
+        assert_roundtrip(input);
     }
 
     #[test]
     fn test_deeply_nested_arrays() {
-        let s = r#"---
+        let input = r#"---
 a:
   - b
   - - c
@@ -447,38 +257,72 @@ a:
       - - f
       - - e"#;
 
-        let docs = YamlLoader::load_from_str(&s).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.dump(doc).unwrap();
-        }
-        println!("original:\n{}", s);
-        println!("emitted:\n{}", writer);
-
-        assert_eq!(s, writer);
+        assert_roundtrip(input);
     }
 
     #[test]
     fn test_nested_hashes() {
-        let s = r#"---
+        let input = r#"---
 a:
   b:
     c:
       d:
         e: f"#;
 
-        let docs = YamlLoader::load_from_str(&s).unwrap();
-        let doc = &docs[0];
-        let mut writer = String::new();
-        {
-            let mut emitter = YamlEmitter::new(&mut writer);
-            emitter.dump(doc).unwrap();
-        }
-        println!("original:\n{}", s);
-        println!("emitted:\n{}", writer);
+        assert_roundtrip(input);
+    }
 
-        assert_eq!(s, writer);
+    fixture_test!(test_emit_simple, "emitter/simple");
+
+    fixture_test!(test_emit_complex, "emitter/complex");
+
+    fixture_test!(test_emit_avoid_quotes, "emitter/avoid-quotes");
+
+    fixture_test!(test_emit_quoted_bools, "emitter/quoted-bools");
+
+    fixture_test!(test_comments_001, "emitter/comments-001");
+
+    fixture_test!(test_comments_002, "emitter/comments-002");
+
+    fixture_test!(test_comments_hash, "emitter/comments-hash");
+    fixture_test!(test_comments_hash_deep, "emitter/comments-hash-deep");
+
+    fixture_test!(test_comments_array, "emitter/comments-array");
+    fixture_test!(test_comments_array_deep, "emitter/comments-array-deep");
+
+    // Asserts the roundtrip result is the same than the input
+    fn assert_roundtrip(input: &str) {
+        assert_formatted(input, input, true)
+    }
+
+    fn assert_roundtrip_noncompact(input: &str) {
+        assert_formatted(input, input, false)
+    }
+
+    // Asserts the input is formatted to the expected output
+    fn assert_formatted(expected: &str, input: &str, compact: bool) {
+        let docs = YamlLoader::load_from_str(input).unwrap();
+        let first_doc = &docs[0];
+
+        let mut output = String::new();
+        let mut emitter = YamlEmitter::new(&mut output);
+        emitter.compact(compact);
+        emitter.dump(first_doc).unwrap();
+
+        assert_eq!(expected, output)
+    }
+
+    fn fixture_roundtrip(input: &str, expected: &str, record: bool) {
+        let input = fs::read_to_string(input).expect("cannot read input fixture");
+        let loaded = YamlLoader::load_from_str(&input).expect("cannot load input fixture");
+        let mut actual = String::new();
+        YamlEmitter::new(&mut actual).dump(&loaded[0]).unwrap();
+
+        if record {
+            fs::write(expected, actual).expect("cannot record fixture");
+        } else {
+            let expected = fs::read_to_string(expected).expect("cannot read expected fixture");
+            assert_eq!(expected, actual);
+        }
     }
 }

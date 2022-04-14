@@ -1,0 +1,21 @@
+---
+repos:
+  # Is this supported?
+  - repo: "https://github.com/rapidsai/frigate/"
+    rev: v0.4.0 #  pre-commit autoupdate  - to keep the version up to date
+    # and an in between keys comment here
+    hooks:
+      - id: frigate
+        # Initial comment
+        versions:
+          - 1 # An inline comment
+          # What?
+          # Another comment
+          # More comments...
+          - 2
+          - 3 # The last comment
+          # And a confusing one too
+  - repo: "https://github.com/gruntwork-io/pre-commit"
+    rev: v0.1.12 #  pre-commit autoupdate  - to keep the version up to date
+    hooks:
+      - id: helmlint"

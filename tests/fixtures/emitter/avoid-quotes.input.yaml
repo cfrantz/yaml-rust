@@ -1,0 +1,33 @@
+---
+a7: 你好
+boolean: "true"
+boolean2: "false"
+date: 2014-12-31
+empty_string: ""
+empty_string1: " "
+empty_string2: "    a"
+empty_string3: "    a "
+exp: "12e7"
+field: ":"
+field2: "{"
+field3: "\\"
+field4: "\n"
+field5: "can't avoid quote"
+float: "2.6"
+int: "4"
+nullable: "null"
+nullable2: "~"
+products:
+  "*coffee":
+    amount: 4
+  "*cookies":
+    amount: 4
+  ".milk":
+    amount: 1
+  "2.4": real key
+  "[1,2,3,4]": array key
+  "true": bool key
+  "{}": empty hash key
+x: test
+y: avoid quoting here
+z: string with spaces

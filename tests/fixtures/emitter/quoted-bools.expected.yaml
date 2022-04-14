@@ -1,0 +1,33 @@
+---
+string0: "yes"
+string1: "no"
+string2: "true"
+string3: "false"
+string4: "~"
+null0: ~
+? - true
+  - false
+: real_bools
+? - "True"
+  - "TRUE"
+  - "False"
+  - "FALSE"
+  - y
+  - Y
+  - "yes"
+  - "Yes"
+  - "YES"
+  - n
+  - N
+  - "no"
+  - "No"
+  - "NO"
+  - "on"
+  - "On"
+  - "ON"
+  - "off"
+  - "Off"
+  - "OFF"
+: false_bools
+bool0: true
+bool1: false

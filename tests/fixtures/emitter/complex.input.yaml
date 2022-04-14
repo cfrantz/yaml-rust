@@ -1,0 +1,17 @@
+cataloge:
+  product: &coffee   { name: Coffee,    price: 2.5  ,  unit: 1l  }
+  product: &cookies  { name: Cookies!,  price: 3.40 ,  unit: 400g}
+
+products:
+  *coffee:
+    amount: 4
+  *cookies:
+    amount: 4
+  [1,2,3,4]:
+    array key
+  2.4:
+    real key
+  true:
+    bool key
+  {}:
+    empty hash key

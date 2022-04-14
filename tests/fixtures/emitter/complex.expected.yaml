@@ -1,0 +1,24 @@
+---
+cataloge:
+  product:
+    name: Cookies!
+    price: 3.40
+    unit: 400g
+products:
+  ? name: Coffee
+    price: 2.5
+    unit: 1l
+  : amount: 4
+  ? name: Cookies!
+    price: 3.40
+    unit: 400g
+  : amount: 4
+  ? - 1
+    - 2
+    - 3
+    - 4
+  : array key
+  2.4: real key
+  true: bool key
+  ? {}
+  : empty hash key
