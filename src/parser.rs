@@ -34,7 +34,7 @@ impl<'re, T: Iterator<Item = char>, R: EventReceiver> Parser<'re, T, R> {
     pub fn new(src: T, recv: &'re mut R) -> Parser<T, R> {
         Parser {
             recv,
-            scanner: Scanner::new(src),
+            scanner: Scanner::new(src, false),
             states: Vec::new(),
             state: State::StreamStart,
             token: None,
