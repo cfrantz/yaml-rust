@@ -1,5 +1,16 @@
----
-- entry: value
-- array:
-    - first: 1
-    - second: 2
+--- # Inlined document begin comment
+# Initial comment 1
+# Initial comment 2
+# Initial comment 3
+# Before entry
+- entry: value # Inlined entry
+# After entry
+# Before array
+- array: # Inlined array
+    # Before first
+    - first: 1 # Inlined first
+    # After first
+    # Before second
+    - second: 2 # Inlined second
+    # After second
+# After array
