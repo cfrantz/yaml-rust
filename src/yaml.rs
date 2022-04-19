@@ -200,7 +200,7 @@ impl YamlLoader {
             key_stack: Vec::new(),
             anchor_map: BTreeMap::new(),
         };
-        let mut parser = Parser::new(source.chars(), &mut loader);
+        let mut parser = Parser::new(source.chars(), &mut loader, true);
         parser.load(true)?;
         Ok(loader.docs)
     }
