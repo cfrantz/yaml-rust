@@ -8,29 +8,6 @@ use std::fmt;
 mod error;
 mod funcs;
 
-macro_rules! debug_comment {
-  ($msg:expr) => {
-    comment_debug!($msg,);
-  };
-  ($msg:expr, $($opt:expr), *) => {
-    println!("[DEBUG-COMMENT]");
-    println!(" => {}", $msg);
-    $(
-      println!(" => {}: {:?}", stringify!($opt), $opt);
-    )*
-  };
-}
-
-macro_rules! debug_comment_disallowed {
-  ($msg:expr) => {
-    debug_comment_disallowed!($msg,);
-  };
-  ($msg:expr, $($opt:expr), *) => {
-    debug_comment!($msg, $($opt)*);
-    unreachable!("[DEBUG-COMMENT-DISALLOWED]");
-  };
-}
-
 pub struct YamlEmitter<'a> {
     writer: &'a mut dyn fmt::Write,
     best_indent: usize,
@@ -156,7 +133,6 @@ impl<'a> YamlEmitter<'a> {
             }
 
             if entry.is_comment() {
-                debug_comment!("emitting comment inside array (as entry)", entry);
                 self.emit_node(entry)?;
                 continue;
             }
@@ -194,7 +170,6 @@ impl<'a> YamlEmitter<'a> {
             }
 
             if key.is_comment() {
-                debug_comment!("emitting comment inside hash (as key)", key);
                 self.emit_node(key)?;
                 continue;
             }
@@ -263,7 +238,7 @@ impl<'a> YamlEmitter<'a> {
                 self.emit_hash(hash)
             }
             Yaml::Comment(_, _) => {
-                debug_comment_disallowed!("should never emit comment as value", value);
+                unreachable!("should never emit comment as a value: {:?}", value)
             }
             _ => {
                 write!(self.writer, " ")?;
