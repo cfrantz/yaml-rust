@@ -24,6 +24,7 @@ pub struct Scanner<T> {
     tokens: VecDeque<Token>,
     buffer: VecDeque<char>,
     error: Option<ScanError>,
+    with_comments: bool,
 
     stream_start_produced: bool,
     stream_end_produced: bool,
@@ -35,6 +36,11 @@ pub struct Scanner<T> {
     flow_level: u8,
     tokens_parsed: usize,
     token_available: bool,
+
+    // Tracks whether a line has been skipped or not during the ongoing scan
+    // Let's the scanner determine if the scanned comment is inline or not.
+    has_skipped_line: bool,
+    has_skipped_line_reset: bool,
 }
 
 impl<T: Iterator<Item = char>> Iterator for Scanner<T> {
@@ -56,13 +62,14 @@ impl<T: Iterator<Item = char>> Iterator for Scanner<T> {
 
 impl<T: Iterator<Item = char>> Scanner<T> {
     /// Creates the YAML tokenizer.
-    pub fn new(rdr: T) -> Scanner<T> {
+    pub fn new(rdr: T, with_comments: bool) -> Scanner<T> {
         Scanner {
             rdr,
             buffer: VecDeque::new(),
             mark: Marker::new(0, 1, 0),
             tokens: VecDeque::new(),
             error: None,
+            with_comments,
 
             stream_start_produced: false,
             stream_end_produced: false,
@@ -74,6 +81,8 @@ impl<T: Iterator<Item = char>> Scanner<T> {
             flow_level: 0,
             tokens_parsed: 0,
             token_available: false,
+            has_skipped_line: false,
+            has_skipped_line_reset: false,
         }
     }
 
@@ -140,26 +149,27 @@ impl<T: Iterator<Item = char>> Scanner<T> {
     }
 
     #[inline]
-    fn skip_line(&mut self) {
+    fn skip_line(&mut self, should_reset: bool) -> bool {
+        self.has_skipped_line_reset = should_reset;
+
         if self.buffer[0] == '\r' && self.buffer[1] == '\n' {
+            self.has_skipped_line = true;
             self.skip();
             self.skip();
+            true
         } else if is_break(self.buffer[0]) {
+            self.has_skipped_line = true;
             self.skip();
+            true
+        } else {
+            false
         }
     }
 
     #[inline]
-    fn read_break(&mut self, s: &mut String) {
-        if self.buffer[0] == '\r' && self.buffer[1] == '\n' {
-            s.push('\n');
-            self.skip();
-            self.skip();
-        } else if self.buffer[0] == '\r' || self.buffer[0] == '\n' {
-            s.push('\n');
-            self.skip();
-        } else {
-            unreachable!();
+    fn read_break(&mut self, out: &mut String) {
+        if self.skip_line(false) {
+            out.push('\n');
         }
     }
 
@@ -173,6 +183,10 @@ impl<T: Iterator<Item = char>> Scanner<T> {
     }
 
     fn fetch_next_token(&mut self) -> ScanResult {
+        if self.has_skipped_line_reset {
+            self.has_skipped_line = false;
+        }
+
         self.lookahead(1);
         // println!("--> fetch_next_token Cur {:?} {:?}", self.mark, self.ch());
 
@@ -180,6 +194,7 @@ impl<T: Iterator<Item = char>> Scanner<T> {
             self.fetch_stream_start();
             return Ok(());
         }
+
         self.skip_to_next_token();
 
         self.stale_simple_keys()?;
@@ -249,6 +264,8 @@ impl<T: Iterator<Item = char>> Scanner<T> {
             // plain scalar
             '-' if !is_blankz(nc) => self.fetch_plain_scalar(),
             ':' | '?' if !is_blankz(nc) && self.flow_level == 0 => self.fetch_plain_scalar(),
+            // comment
+            '#' if self.with_comments => self.fetch_comment(),
             '%' | '@' | '`' => Err(ScanError::new(
                 self.mark,
                 &format!("unexpected character: `{}'", ch),
@@ -324,12 +341,12 @@ impl<T: Iterator<Item = char>> Scanner<T> {
                 '\t' if self.flow_level > 0 || !self.simple_key_allowed => self.skip(),
                 '\n' | '\r' => {
                     self.lookahead(2);
-                    self.skip_line();
+                    self.skip_line(true);
                     if self.flow_level == 0 {
                         self.allow_simple_key();
                     }
                 }
-                '#' => {
+                '#' if !self.with_comments => {
                     while !is_breakz(self.ch()) {
                         self.skip();
                         self.lookahead(1);
@@ -405,33 +422,6 @@ impl<T: Iterator<Item = char>> Scanner<T> {
                 // name"))
             }
         };
-        self.lookahead(1);
-
-        while is_blank(self.ch()) {
-            self.skip();
-            self.lookahead(1);
-        }
-
-        if self.ch() == '#' {
-            while !is_breakz(self.ch()) {
-                self.skip();
-                self.lookahead(1);
-            }
-        }
-
-        if !is_breakz(self.ch()) {
-            return Err(ScanError::new(
-                start_mark,
-                "while scanning a directive, did not find expected comment or line break",
-            ));
-        }
-
-        // Eat a line break
-        if is_break(self.ch()) {
-            self.lookahead(2);
-            self.skip_line();
-        }
-
         Ok(tok)
     }
 
@@ -990,7 +980,7 @@ impl<T: Iterator<Item = char>> Scanner<T> {
 
         if is_break(self.ch()) {
             self.lookahead(2);
-            self.skip_line();
+            self.skip_line(false);
         }
 
         if increment > 0 {
@@ -1178,7 +1168,7 @@ impl<T: Iterator<Item = char>> Scanner<T> {
                     '\\' if !single && is_break(self.buffer[1]) => {
                         self.lookahead(3);
                         self.skip();
-                        self.skip_line();
+                        self.skip_line(false);
                         leading_blanks = true;
                         break;
                     }
@@ -1360,9 +1350,13 @@ impl<T: Iterator<Item = char>> Scanner<T> {
                 break;
             }
 
+            // We've just stumbled upon an inline comment
+            // Ensure new line seen is reset.
             if self.ch() == '#' {
+                self.has_skipped_line_reset = true;
                 break;
             }
+
             while !is_blankz(self.ch()) {
                 // indicators can end a plain scalar, see 7.3.3. Plain Style
                 match self.ch() {
@@ -1584,32 +1578,73 @@ impl<T: Iterator<Item = char>> Scanner<T> {
         last.possible = false;
         Ok(())
     }
+
+    fn fetch_comment(&mut self) -> ScanResult {
+        let mark = self.get_mark();
+
+        // Consume hashtag
+        self.skip();
+        self.lookahead(1);
+
+        // Consume comment content
+        let mut comment = String::new();
+        while !is_breakz(self.ch()) {
+            comment.push(self.ch());
+            self.skip();
+            self.lookahead(1);
+        }
+
+        let token = Token(mark, TokenType::Comment(comment, !self.has_skipped_line));
+        self.tokens.push_back(token);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use std::str::Chars;
+
     use super::TokenType::*;
     use super::*;
 
     macro_rules! next {
-        ($p:ident, $tk:pat) => {{
-            let tok = $p.next().unwrap();
-            match tok.1 {
-                $tk => {}
-                _ => panic!("unexpected token: {:?}", tok),
+        ($it:ident, $expected_token:pat) => {{
+            let token = $it.next().unwrap();
+            match token.1 {
+                $expected_token => {}
+                _ => panic!("unexpected token: {:?}", token),
             }
         }};
-    }
-
-    macro_rules! next_scalar {
-        ($p:ident, $tk:expr, $v:expr) => {{
-            let tok = $p.next().unwrap();
-            match tok.1 {
-                Scalar(style, ref v) => {
-                    assert_eq!(style, $tk);
-                    assert_eq!(v, $v);
+        // Expect a token with one value
+        ($it:ident, $expected_token:ident, $expected_value:expr) => {{
+            let token = $it.next().unwrap();
+            match token.1 {
+                $expected_token(ref v, _) => {
+                    assert_eq!(v, $expected_value);
                 }
-                _ => panic!("unexpected token: {:?}", tok),
+                _ => panic!("unexpected token: {:?}", token),
+            }
+        }};
+        // Expect a token with two values
+        ($it:ident, $expected_token:ident, $expected_value_one:expr, $expected_value_two:expr) => {{
+            let token = $it.next().unwrap();
+            match token.1 {
+                $expected_token(ref v1, v2) => {
+                    assert_eq!(v1, $expected_value_one);
+                    assert_eq!(v2, $expected_value_two);
+                }
+                _ => panic!("unexpected token: {:?}", token),
+            }
+        }};
+        // Expect a scalar token with expected scalar value type and value
+        ($it:ident, $expected_style:expr, $expected_value:expr) => {{
+            let token = $it.next().unwrap();
+            match token.1 {
+                Scalar(style, ref v) => {
+                    assert_eq!(style, $expected_style);
+                    assert_eq!(v, $expected_value);
+                }
+                _ => panic!("unexpected token: {:?}", token),
             }
         }};
     }
@@ -1619,11 +1654,16 @@ mod test {
             assert_eq!($p.next(), None);
         }};
     }
+
+    fn get_scanner(input: &str) -> Scanner<Chars> {
+        Scanner::new(input.chars(), true)
+    }
+
     /// test cases in libyaml scanner.c
     #[test]
     fn test_empty() {
         let s = "";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, StreamEnd);
         end!(p);
@@ -1632,7 +1672,7 @@ mod test {
     #[test]
     fn test_scalar() {
         let s = "a scalar";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, Scalar(TScalarStyle::Plain, _));
         next!(p, StreamEnd);
@@ -1645,7 +1685,7 @@ mod test {
 'a scalar'
 ...
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, DocumentStart);
         next!(p, Scalar(TScalarStyle::SingleQuoted, _));
@@ -1663,7 +1703,8 @@ mod test {
 ---
 'a scalar'
 ";
-        let mut p = Scanner::new(s.chars());
+
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, Scalar(TScalarStyle::SingleQuoted, _));
         next!(p, DocumentStart);
@@ -1677,10 +1718,10 @@ mod test {
     #[test]
     fn test_a_flow_sequence() {
         let s = "[item 1, item 2, item 3]";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, FlowSequenceStart);
-        next_scalar!(p, TScalarStyle::Plain, "item 1");
+        next!(p, TScalarStyle::Plain, "item 1");
         next!(p, FlowEntry);
         next!(p, Scalar(TScalarStyle::Plain, _));
         next!(p, FlowEntry);
@@ -1698,7 +1739,7 @@ mod test {
     ? a complex key: another value,
 }
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, FlowMappingStart);
         next!(p, Key);
@@ -1706,8 +1747,9 @@ mod test {
         next!(p, Value);
         next!(p, Scalar(TScalarStyle::Plain, _));
         next!(p, FlowEntry);
+        next!(p, Comment(_, true));
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "a complex key");
+        next!(p, TScalarStyle::Plain, "a complex key");
         next!(p, Value);
         next!(p, Scalar(TScalarStyle::Plain, _));
         next!(p, FlowEntry);
@@ -1728,30 +1770,30 @@ mod test {
   key 1: value 1
   key 2: value 2
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, BlockSequenceStart);
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 1");
+        next!(p, TScalarStyle::Plain, "item 1");
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 2");
+        next!(p, TScalarStyle::Plain, "item 2");
         next!(p, BlockEntry);
         next!(p, BlockSequenceStart);
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 3.1");
+        next!(p, TScalarStyle::Plain, "item 3.1");
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 3.2");
+        next!(p, TScalarStyle::Plain, "item 3.2");
         next!(p, BlockEnd);
         next!(p, BlockEntry);
         next!(p, BlockMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "key 1");
+        next!(p, TScalarStyle::Plain, "key 1");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "value 1");
+        next!(p, TScalarStyle::Plain, "value 1");
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "key 2");
+        next!(p, TScalarStyle::Plain, "key 2");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "value 2");
+        next!(p, TScalarStyle::Plain, "value 2");
         next!(p, BlockEnd);
         next!(p, BlockEnd);
         next!(p, StreamEnd);
@@ -1771,13 +1813,14 @@ a sequence:
   - item 1
   - item 2
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, BlockMappingStart);
         next!(p, Key);
         next!(p, Scalar(_, _));
         next!(p, Value);
         next!(p, Scalar(_, _));
+        next!(p, Comment(_, _));
         next!(p, Key);
         next!(p, Scalar(_, _));
         next!(p, Value);
@@ -1816,16 +1859,16 @@ key:
 - item 1
 - item 2
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, BlockMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "key");
+        next!(p, TScalarStyle::Plain, "key");
         next!(p, Value);
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 1");
+        next!(p, TScalarStyle::Plain, "item 1");
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 2");
+        next!(p, TScalarStyle::Plain, "item 2");
         next!(p, BlockEnd);
         next!(p, StreamEnd);
         end!(p);
@@ -1841,33 +1884,33 @@ key:
 - ? complex key
   : complex value
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, BlockSequenceStart);
         next!(p, BlockEntry);
         next!(p, BlockSequenceStart);
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 1");
+        next!(p, TScalarStyle::Plain, "item 1");
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 2");
+        next!(p, TScalarStyle::Plain, "item 2");
         next!(p, BlockEnd);
         next!(p, BlockEntry);
         next!(p, BlockMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "key 1");
+        next!(p, TScalarStyle::Plain, "key 1");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "value 1");
+        next!(p, TScalarStyle::Plain, "value 1");
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "key 2");
+        next!(p, TScalarStyle::Plain, "key 2");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "value 2");
+        next!(p, TScalarStyle::Plain, "value 2");
         next!(p, BlockEnd);
         next!(p, BlockEntry);
         next!(p, BlockMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "complex key");
+        next!(p, TScalarStyle::Plain, "complex key");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "complex value");
+        next!(p, TScalarStyle::Plain, "complex value");
         next!(p, BlockEnd);
         next!(p, BlockEnd);
         next!(p, StreamEnd);
@@ -1884,30 +1927,30 @@ key:
 : key 1: value 1
   key 2: value 2
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, BlockMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "a sequence");
+        next!(p, TScalarStyle::Plain, "a sequence");
         next!(p, Value);
         next!(p, BlockSequenceStart);
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 1");
+        next!(p, TScalarStyle::Plain, "item 1");
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "item 2");
+        next!(p, TScalarStyle::Plain, "item 2");
         next!(p, BlockEnd);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "a mapping");
+        next!(p, TScalarStyle::Plain, "a mapping");
         next!(p, Value);
         next!(p, BlockMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "key 1");
+        next!(p, TScalarStyle::Plain, "key 1");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "value 1");
+        next!(p, TScalarStyle::Plain, "value 1");
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "key 2");
+        next!(p, TScalarStyle::Plain, "key 2");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "value 2");
+        next!(p, TScalarStyle::Plain, "value 2");
         next!(p, BlockEnd);
         next!(p, BlockEnd);
         next!(p, StreamEnd);
@@ -1922,15 +1965,15 @@ key:
     : bar,
 }
 ";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, FlowMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "foo");
+        next!(p, TScalarStyle::Plain, "foo");
         next!(p, Value);
         next!(p, FlowEntry);
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "bar");
+        next!(p, TScalarStyle::Plain, "bar");
         next!(p, FlowEntry);
         next!(p, FlowMappingEnd);
         next!(p, StreamEnd);
@@ -1945,25 +1988,25 @@ key:
         // non-space “safe” character, as this causes no ambiguity."
 
         let s = "{a: :b}";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, FlowMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "a");
+        next!(p, TScalarStyle::Plain, "a");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, ":b");
+        next!(p, TScalarStyle::Plain, ":b");
         next!(p, FlowMappingEnd);
         next!(p, StreamEnd);
         end!(p);
 
         let s = "{a: ?b}";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, FlowMappingStart);
         next!(p, Key);
-        next_scalar!(p, TScalarStyle::Plain, "a");
+        next!(p, TScalarStyle::Plain, "a");
         next!(p, Value);
-        next_scalar!(p, TScalarStyle::Plain, "?b");
+        next!(p, TScalarStyle::Plain, "?b");
         next!(p, FlowMappingEnd);
         next!(p, StreamEnd);
         end!(p);
@@ -1972,16 +2015,16 @@ key:
     #[test]
     fn test_plain_scalar_starting_with_indicators_in_block() {
         let s = ":a";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
-        next_scalar!(p, TScalarStyle::Plain, ":a");
+        next!(p, TScalarStyle::Plain, ":a");
         next!(p, StreamEnd);
         end!(p);
 
         let s = "?a";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
-        next_scalar!(p, TScalarStyle::Plain, "?a");
+        next!(p, TScalarStyle::Plain, "?a");
         next!(p, StreamEnd);
         end!(p);
     }
@@ -1989,16 +2032,16 @@ key:
     #[test]
     fn test_plain_scalar_containing_indicators_in_block() {
         let s = "a:,b";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
-        next_scalar!(p, TScalarStyle::Plain, "a:,b");
+        next!(p, TScalarStyle::Plain, "a:,b");
         next!(p, StreamEnd);
         end!(p);
 
         let s = ":,b";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
-        next_scalar!(p, TScalarStyle::Plain, ":,b");
+        next!(p, TScalarStyle::Plain, ":,b");
         next!(p, StreamEnd);
         end!(p);
     }
@@ -2006,14 +2049,86 @@ key:
     #[test]
     fn test_scanner_cr() {
         let s = "---\r\n- tok1\r\n- tok2";
-        let mut p = Scanner::new(s.chars());
+        let mut p = get_scanner(s);
         next!(p, StreamStart(..));
         next!(p, DocumentStart);
         next!(p, BlockSequenceStart);
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "tok1");
+        next!(p, TScalarStyle::Plain, "tok1");
         next!(p, BlockEntry);
-        next_scalar!(p, TScalarStyle::Plain, "tok2");
+        next!(p, TScalarStyle::Plain, "tok2");
+        next!(p, BlockEnd);
+        next!(p, StreamEnd);
+        end!(p);
+    }
+
+    #[test]
+    fn test_scan_comment() {
+        let s = "--- #Comment Header
+# Comment A
+#Comment B
+### Comment C
+###Comment D
+a0 bb: \"#trickyval\" #inline comment quoted
+a2: 4 # inline comment plain
+- some value 1
+# interleaved comment
+- some value 2 # array inline
+array: [
+    1, # inline array entry
+    2,
+    # on top of array entry
+    3
+] #end of array inline should be not inlined
+- some value 2 # block-end-comment
+
+";
+        let mut p = get_scanner(s);
+        next!(p, StreamStart(..));
+        next!(p, DocumentStart);
+        next!(p, Comment, "Comment Header", true);
+        next!(p, Comment, " Comment A", false);
+        next!(p, Comment, "Comment B", false);
+        next!(p, Comment, "## Comment C", false);
+        next!(p, Comment, "##Comment D", false);
+        next!(p, BlockMappingStart);
+        next!(p, Key);
+        next!(p, TScalarStyle::Plain, "a0 bb");
+        next!(p, Value);
+        next!(p, TScalarStyle::DoubleQuoted, "#trickyval");
+        next!(p, Comment, "inline comment quoted", true);
+        next!(p, Key);
+        next!(p, TScalarStyle::Plain, "a2");
+        next!(p, Value);
+        next!(p, TScalarStyle::Plain, "4");
+        next!(p, Comment, " inline comment plain", true);
+        next!(p, BlockEntry);
+        next!(p, TScalarStyle::Plain, "some value 1");
+        next!(p, Comment, " interleaved comment", false);
+        next!(p, BlockEntry);
+        next!(p, TScalarStyle::Plain, "some value 2");
+        next!(p, Comment, " array inline", true);
+        next!(p, Key);
+        next!(p, TScalarStyle::Plain, "array");
+        next!(p, Value);
+        next!(p, FlowSequenceStart);
+        next!(p, TScalarStyle::Plain, "1");
+        next!(p, FlowEntry);
+        next!(p, Comment, " inline array entry", true);
+        next!(p, TScalarStyle::Plain, "2");
+        next!(p, FlowEntry);
+        next!(p, Comment, " on top of array entry", false);
+        next!(p, TScalarStyle::Plain, "3");
+        next!(p, FlowSequenceEnd);
+        next!(
+            p,
+            Comment,
+            "end of array inline should be not inlined",
+            false
+        );
+        next!(p, BlockEntry);
+        next!(p, TScalarStyle::Plain, "some value 2");
+        next!(p, Comment, " block-end-comment", true);
         next!(p, BlockEnd);
         next!(p, StreamEnd);
         end!(p);
