@@ -1,9 +1,9 @@
----
+--- # comment
 a0 bb: val
 a1:
   b1: 4
   b2: d
-a2: 4
+a2: 4 # i'm comment
 a3:
   - 1
   - 2

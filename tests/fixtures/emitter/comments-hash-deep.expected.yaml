@@ -1,12 +1,37 @@
----
-key: value
-deep_map:
-  level1:
-    one: value
-    level2:
-      two: two
-      level3:
-        three: three
-array:
-  - first: 1
-  - second: 2
+--- # inlined document begin comment
+# initial comment 1
+# initial comment 2
+# initial comment 3
+# before key
+key: value # inlined key
+# after key
+# before deep_map
+deep_map: # inline deep_map
+  # before level 1
+  level1: # inline level 1
+    # before one
+    one: value # inline one
+    # after one
+    # before level 2
+    level2: # inline level 2
+      # before two
+      two: two # inline two
+      # after two
+      # before level 3
+      level3: # inline level 3
+        # before three
+        three: three # inline three
+        # after three
+      # after level 3
+    # after level 2
+  # after level 1
+# after deep_map
+# before array
+array: # inlined array
+  # before first
+  - first: 1 # inlined first
+  # after first
+  # before second
+  - second: 2 # inlined second
+  # after second
+# after array

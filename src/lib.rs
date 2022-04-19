@@ -91,7 +91,7 @@ mod tests {
         let docs = YamlLoader::load_from_str(s).unwrap();
         let doc = &docs[0];
 
-        assert_eq!(doc[0]["name"].as_str().unwrap(), "Ogre");
+        assert_eq!(doc[1]["name"].as_str().unwrap(), "Ogre");
 
         let mut writer = String::new();
         {

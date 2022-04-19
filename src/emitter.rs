@@ -8,6 +8,29 @@ use std::fmt;
 mod error;
 mod funcs;
 
+macro_rules! debug_comment {
+  ($msg:expr) => {
+    comment_debug!($msg,);
+  };
+  ($msg:expr, $($opt:expr), *) => {
+    println!("[DEBUG-COMMENT]");
+    println!(" => {}", $msg);
+    $(
+      println!(" => {}: {:?}", stringify!($opt), $opt);
+    )*
+  };
+}
+
+macro_rules! debug_comment_disallowed {
+  ($msg:expr) => {
+    debug_comment_disallowed!($msg,);
+  };
+  ($msg:expr, $($opt:expr), *) => {
+    debug_comment!($msg, $($opt)*);
+    unreachable!("[DEBUG-COMMENT-DISALLOWED]");
+  };
+}
+
 pub struct YamlEmitter<'a> {
     writer: &'a mut dyn fmt::Write,
     best_indent: usize,
@@ -45,13 +68,31 @@ impl<'a> YamlEmitter<'a> {
         self.compact
     }
 
-    pub fn dump(&mut self, doc: &Yaml) -> EmitResult {
-        writeln!(self.writer, "---")?;
+    pub fn dump(&mut self, doc: &'a Yaml) -> EmitResult {
+        write!(self.writer, "---")?;
+
+        // Emits comments inlined after document beginning
+        if let Yaml::Array(arr) = doc {
+            if let Some(first) = arr.first() {
+                if first.is_inline_comment() {
+                    self.emit_node(first)?;
+                }
+            }
+        } else if let Yaml::Hash(hash) = doc {
+            if let Some((first, _)) = hash.front() {
+                if first.is_inline_comment() {
+                    self.emit_node(first)?;
+                }
+            }
+        }
+
+        writeln!(self.writer)?;
+
         self.level = -1;
         self.emit_node(doc)
     }
 
-    fn emit_node(&mut self, node: &Yaml) -> EmitResult {
+    fn emit_node(&mut self, node: &'a Yaml) -> EmitResult {
         match *node {
             Yaml::Array(ref v) => self.emit_array(v),
             Yaml::Hash(ref v) => self.emit_hash(v),
@@ -78,6 +119,13 @@ impl<'a> YamlEmitter<'a> {
                 write!(self.writer, "{}", v)?;
                 Ok(())
             }
+            Yaml::Comment(ref comment, inline) => {
+                match inline {
+                    true => write!(self.writer, " #{}", comment)?,
+                    false => write!(self.writer, "#{}", comment)?,
+                }
+                Ok(())
+            }
             Yaml::Null | Yaml::BadValue => {
                 write!(self.writer, "~")?;
                 Ok(())
@@ -86,35 +134,71 @@ impl<'a> YamlEmitter<'a> {
         }
     }
 
-    fn emit_array(&mut self, arr: &[Yaml]) -> EmitResult {
+    fn emit_array(&mut self, arr: &'a [Yaml]) -> EmitResult {
         if arr.is_empty() {
             write!(self.writer, "[]")?;
             return Ok(());
         }
 
         self.level += 1;
-        for (idx, entry) in arr.iter().enumerate() {
+        let mut idx = -1;
+        let mut iter = arr.iter().peekable();
+        while let Some(entry) = iter.next() {
+            // The only way the first entry is an inlined comment is because
+            // the comment belongs to the parent. Ignore it.
+            if idx == -1 && entry.is_inline_comment() {
+                continue;
+            }
+
+            idx += 1;
             if idx > 0 {
                 self.emit_line_begin()?;
             }
+
+            if entry.is_comment() {
+                debug_comment!("emitting comment inside array (as entry)", entry);
+                self.emit_node(entry)?;
+                continue;
+            }
+
             write!(self.writer, "-")?;
             self.emit_value(true, entry)?;
+
+            if let Some(entry) = iter.next_if(|entry| entry.is_inline_comment()) {
+                self.emit_node(entry)?;
+            }
         }
         self.level -= 1;
         Ok(())
     }
 
-    fn emit_hash(&mut self, hash: &Hash) -> EmitResult {
+    fn emit_hash(&mut self, hash: &'a Hash) -> EmitResult {
         if hash.is_empty() {
             self.writer.write_str("{}")?;
             return Ok(());
         }
 
         self.level += 1;
-        for (idx, (key, value)) in hash.iter().enumerate() {
+        let mut idx = -1;
+        let mut iter = hash.iter().peekable();
+        while let Some((key, value)) = iter.next() {
+            // The only way the first entry is an inlined comment is because
+            // the comment belongs to the parent. Ignore it.
+            if idx == -1 && key.is_inline_comment() {
+                continue;
+            }
+
+            idx += 1;
             if idx > 0 {
                 self.emit_line_begin()?;
             }
+
+            if key.is_comment() {
+                debug_comment!("emitting comment inside hash (as key)", key);
+                self.emit_node(key)?;
+                continue;
+            }
+
             let is_complex_key = matches!(*key, Yaml::Hash(_) | Yaml::Array(_));
             if is_complex_key {
                 write!(self.writer, "?")?;
@@ -127,6 +211,10 @@ impl<'a> YamlEmitter<'a> {
                 write!(self.writer, ":")?;
                 self.emit_value(false, value)?;
             }
+
+            if let Some((key, _)) = iter.next_if(|(key, _)| key.is_inline_comment()) {
+                self.emit_node(key)?;
+            }
         }
         self.level -= 1;
         Ok(())
@@ -136,29 +224,46 @@ impl<'a> YamlEmitter<'a> {
     /// following a ":" or "-", either after a space, or on a new line.
     /// If `inline` is true, then the preceding characters are distinct
     /// and short enough to respect the compact flag.
-    fn emit_value(&mut self, inline: bool, value: &Yaml) -> EmitResult {
+    fn emit_value(&mut self, inline: bool, value: &'a Yaml) -> EmitResult {
         match *value {
             Yaml::Array(ref arr) => {
-                if (inline && self.compact) || arr.is_empty() {
-                    write!(self.writer, " ")?;
-                } else {
-                    writeln!(self.writer)?;
-                    self.level += 1;
-                    self.emit_indent()?;
-                    self.level -= 1;
+                if arr.is_empty() {
+                    write!(self.writer, " []")?;
+                    return Ok(());
                 }
-                self.emit_array(arr)
+
+                // Emit inlined comment before starting to spit out the array
+                // If the first entry is an inlined comment, it belongs to
+                // the parent hash key / array entry.
+                let mut from = 0;
+                if arr[0].is_inline_comment() {
+                    self.emit_node(&arr[0])?;
+                    from = 1;
+                }
+
+                self.emit_value_indent(inline)?;
+                self.emit_array(&arr[from..])
             }
             Yaml::Hash(ref hash) => {
-                if (inline && self.compact) || hash.is_empty() {
-                    write!(self.writer, " ")?;
-                } else {
-                    writeln!(self.writer)?;
-                    self.level += 1;
-                    self.emit_indent()?;
-                    self.level -= 1;
+                if hash.is_empty() {
+                    self.writer.write_str(" {}")?;
+                    return Ok(());
                 }
+
+                // Emit inlined comment before starting to spit out the hash
+                // If the first entry is an inlined comment, it belongs to
+                // the parent hash key / array entry.
+                if let Some((key, _)) = hash.front() {
+                    if key.is_inline_comment() {
+                        self.emit_node(key)?;
+                    }
+                }
+
+                self.emit_value_indent(inline)?;
                 self.emit_hash(hash)
+            }
+            Yaml::Comment(_, _) => {
+                debug_comment_disallowed!("should never emit comment as value", value);
             }
             _ => {
                 write!(self.writer, " ")?;
@@ -173,10 +278,19 @@ impl<'a> YamlEmitter<'a> {
         Ok(())
     }
 
-    fn emit_indent(&mut self) -> EmitResult {
-        if self.level <= 0 {
-            return Ok(());
+    fn emit_value_indent(&mut self, inline: bool) -> EmitResult {
+        if inline && self.compact {
+            write!(self.writer, " ")?;
+        } else {
+            writeln!(self.writer)?;
+            self.level += 1;
+            self.emit_indent()?;
+            self.level -= 1;
         }
+        Ok(())
+    }
+
+    fn emit_indent(&mut self) -> EmitResult {
         for _ in 0..(self.level * self.best_indent as isize) {
             write!(self.writer, " ")?;
         }
