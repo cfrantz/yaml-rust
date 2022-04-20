@@ -1,3 +1,13 @@
+### Notes about this fork
+
+This fork results from a personal desire for `yaml-rust` to support parsing and emitting comments.
+The original parser implementation was heavily inspired by the C++ canonical parsers, and these
+did not come with comment support. [See the PR that added comment support.](https://github.com/alevinval/yaml-rust/pull/9)
+
+As part of undertaking this effort, some refactors for the purpose of maintaining of the library had to be done
+as well, but that was never the main goal. Also, my personal desire would be that the fork could eventually
+be merged back in [chyh1990/yaml-rust](chyh1990/yaml-rust), which at the moment of writing, is no longer maintained.
+
 # yaml-rust
 
 The missing YAML 1.2 implementation for Rust.
