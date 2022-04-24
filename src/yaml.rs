@@ -68,14 +68,14 @@ pub type Hash = LinkedHashMap<Yaml, Yaml>;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug, Eq, Ord, Hash)]
 pub enum IntegerFormat {
-    /// Integer in binary zero padded to the given width.
-    Binary(u32),
+    /// Emit Integer (sized `bits`) in binary zero padded to the given `width`.
+    Binary(u32, u32),
     /// Integer in decimal.
     Decimal,
-    /// Integer in hexadecimal zero padded to the given width.
-    Hex(u32),
-    /// Integer in octal zero padded to the given width.
-    Octal(u32),
+    /// Emit Integer (sized `bits`) in hex zero padded to the given `width`.
+    Hex(u32, u32),
+    /// Emit Integer (sized `bits`) in octal zero padded to the given `width`.
+    Octal(u32, u32),
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug, Eq, Ord, Hash)]
@@ -89,6 +89,7 @@ pub enum StringFormat {
 pub enum Meta {
     Integer(IntegerFormat, Box<Yaml>),
     String(StringFormat, Box<Yaml>),
+    Int128(i128),
 }
 
 // parse f64 as Core schema
