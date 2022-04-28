@@ -87,6 +87,7 @@ pub enum StringFormat {
 
 #[derive(Clone, PartialEq, PartialOrd, Debug, Eq, Ord, Hash)]
 pub enum Meta {
+    Fragment(Vec<Yaml>),
     Integer(IntegerFormat, Box<Yaml>),
     String(StringFormat, Box<Yaml>),
     Int128(i128),
@@ -346,6 +347,13 @@ impl Yaml {
             inline
         } else {
             false
+        }
+    }
+
+    pub fn get_comment_fragment(&self) -> Option<&[Yaml]> {
+        match self {
+            Yaml::Meta(Meta::Fragment(f)) if f.len() == 2 && f[0].is_comment() => Some(f),
+            _ => None,
         }
     }
 

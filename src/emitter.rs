@@ -95,7 +95,10 @@ impl<'a> YamlEmitter<'a> {
             Yaml::Comment(ref comment, inline) => {
                 match inline {
                     true => write!(self.writer, " #{}", comment)?,
-                    false => write!(self.writer, "#{}", comment)?,
+                    false => {
+                        writeln!(self.writer, "#{}", comment)?;
+                        self.emit_indent()?;
+                    }
                 }
                 Ok(())
             }
@@ -110,6 +113,12 @@ impl<'a> YamlEmitter<'a> {
 
     fn process_meta(&mut self, op: &'a Meta) -> EmitResult {
         match op {
+            Meta::Fragment(frag) => {
+                for f in frag {
+                    self.emit_node(f)?;
+                }
+                Ok(())
+            }
             Meta::Integer(f, node) => {
                 let old = self.intformat;
                 self.intformat = *f;
@@ -208,10 +217,9 @@ impl<'a> YamlEmitter<'a> {
                 s[i + 1] = b'x';
             }
             IntegerFormat::Octal(_, _) => {
-                if s[i] != b'0' {
-                    i -= 1;
-                    s[i] = b'0';
-                }
+                i -= 2;
+                s[i] = b'0';
+                s[i + 1] = b'o';
             }
             IntegerFormat::Decimal => {}
         };
@@ -302,7 +310,12 @@ impl<'a> YamlEmitter<'a> {
                 self.emit_node(entry)?;
                 continue;
             }
-
+            let entry = if let Some(f) = entry.get_comment_fragment() {
+                self.emit_node(&f[0])?;
+                &f[1]
+            } else {
+                entry
+            };
             write!(self.writer, "-")?;
             self.emit_value(true, entry)?;
 
@@ -550,22 +563,22 @@ a:
     fn test_integer_bases_simple() {
         let expected = r#"---
 dec: 10
-bin: 0b1010
-hex: 0xA
-oct: 012"#;
+bin: 0b10
+hex: 0x10
+oct: 0o10"#;
         let mut hash = Hash::new();
         hash.insert(yaml_string("dec"), yaml_integer(10, IntegerFormat::Decimal));
         hash.insert(
             yaml_string("bin"),
-            yaml_integer(10, IntegerFormat::Binary(32, 0)),
+            yaml_integer(2, IntegerFormat::Binary(32, 0)),
         );
         hash.insert(
             yaml_string("hex"),
-            yaml_integer(10, IntegerFormat::Hex(32, 0)),
+            yaml_integer(16, IntegerFormat::Hex(32, 0)),
         );
         hash.insert(
             yaml_string("oct"),
-            yaml_integer(10, IntegerFormat::Octal(32, 0)),
+            yaml_integer(8, IntegerFormat::Octal(32, 0)),
         );
         let result = yaml_dump(&Yaml::Hash(hash));
         assert_eq!(expected, result);
@@ -576,7 +589,7 @@ oct: 012"#;
         let expected = r#"---
 bin: 0b00001111
 hex: 0x0000ABCD
-oct: 0666"#;
+oct: 0o666"#;
         let mut hash = Hash::new();
         hash.insert(
             yaml_string("bin"),
@@ -602,7 +615,7 @@ oct: 0666"#;
         let expected = r#"---
 bin: 0b11110000
 hex: 0xFFFFFFFE
-oct: 0177771"#;
+oct: 0o177771"#;
         let mut hash = Hash::new();
         hash.insert(
             yaml_string("bin"),
